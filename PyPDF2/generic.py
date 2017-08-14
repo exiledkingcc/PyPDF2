@@ -622,15 +622,16 @@ class DictionaryObject(dict, PdfObject):
                 # and Python users into PDF files tend to be our audience.
                 # we need to do this to correct the streamdata and chop off
                 # an extra character.
-                pos = stream.tell()
-                stream.seek(-10, 1)
-                end = stream.read(9)
-                if end == b_("endstream"):
-                    # we found it by looking back one character further.
-                    data["__streamdata__"] = data["__streamdata__"][:-1]
+                _streamdata = data["__streamdata__"]
+                p = _streamdata.rfind(b_("endstream"))
+                if p > 0:
+                    if _streamdata[p] in utils.WHITESPACES:
+                        p -= 1
+                    data["__streamdata__"] = _streamdata[:p]
+                    data["/Length"] = NumberObject(p)
+                    stream.seek(p - length, 1)
                 else:
-                    if debug: print(("E", e, ndstream, debugging.toHex(end)))
-                    stream.seek(pos, 0)
+                    if debug: print(("E", e, ndstream))
                     raise utils.PdfReadError("Unable to find 'endstream' marker after stream at byte %s." % utils.hexStr(stream.tell()))
         else:
             stream.seek(pos, 0)
