@@ -1147,6 +1147,7 @@ class PdfFileReader(object):
             fileobj.close()
         self.read(stream)
         self.stream = stream
+        self.encrypt = None
 
         self._override_encryption = False
 
@@ -1208,7 +1209,7 @@ class PdfFileReader(object):
         if self.isEncrypted:
             try:
                 self._override_encryption = True
-                self.decrypt('')
+                self.decrypt("")
                 return self.trailer["/Root"]["/Pages"]["/Count"]
             except:
                 raise utils.PdfReadError("File has not been decrypted")
@@ -1674,20 +1675,11 @@ class PdfFileReader(object):
             assert generation == indirectReference.generation
             retval = readObject(self.stream, self)
 
-            # override encryption is used for the /Encrypt dictionary
-            if not self._override_encryption and self.isEncrypted:
-                # if we don't have the encryption key:
-                if not hasattr(self, '_decryption_key'):
+            if self.encrypt and self.encrypt.is_metadata_encrypted():
+                if not self.encrypt.has_key():
                     raise utils.PdfReadError("file has not been decrypted")
                 # otherwise, decrypt here...
-                import struct
-                pack1 = struct.pack("<i", indirectReference.idnum)[:3]
-                pack2 = struct.pack("<i", indirectReference.generation)[:2]
-                key = self._decryption_key + pack1 + pack2
-                assert len(key) == (len(self._decryption_key) + 5)
-                md5_hash = md5(key).digest()
-                key = md5_hash[:min(16, len(self._decryption_key) + 5)]
-                retval = self._decryptObject(retval, key)
+                retval = self._decryptObject(retval, indirectReference.idnum, indirectReference.generation)
         else:
             warnings.warn("Object %d %d not defined."%(indirectReference.idnum,
                         indirectReference.generation), utils.PdfReadWarning)
@@ -1697,17 +1689,17 @@ class PdfFileReader(object):
                     indirectReference.idnum, retval)
         return retval
 
-    def _decryptObject(self, obj, key):
+    def _decryptObject(self, obj, idnum, generation):
         if isinstance(obj, ByteStringObject) or isinstance(obj, TextStringObject):
-            obj = createStringObject(utils.RC4_encrypt(key, obj.original_bytes))
+            obj = createStringObject(self.encrypt.decrypt_data(obj.original_bytes, idnum, generation))
         elif isinstance(obj, StreamObject):
-            obj._data = utils.RC4_encrypt(key, obj._data)
+            obj._data = self.encrypt.decrypt_data(obj._data, idnum, generation)
         elif isinstance(obj, DictionaryObject):
             for dictkey, value in list(obj.items()):
-                obj[dictkey] = self._decryptObject(value, key)
+                obj[dictkey] = self._decryptObject(value, idnum, generation)
         elif isinstance(obj, ArrayObject):
             for i in range(len(obj)):
-                obj[i] = self._decryptObject(obj[i], key)
+                obj[i] = self._decryptObject(obj[i], idnum, generation)
         return obj
 
     def readObjectHeader(self, stream):
@@ -2042,70 +2034,30 @@ class PdfFileReader(object):
         :return: ``0`` if the password failed, ``1`` if the password matched the user
             password, and ``2`` if the password matched the owner password.
         :rtype: int
-        :raises NotImplementedError: if document uses an unsupported encryption
-            method.
         """
-
-        self._override_encryption = True
-        try:
-            return self._decrypt(password)
-        finally:
-            self._override_encryption = False
-
-    def _decrypt(self, password):
-        encrypt = self.trailer['/Encrypt'].getObject()
-        if encrypt['/Filter'] != '/Standard':
-            raise NotImplementedError("only Standard PDF encryption handler is available")
-        if not (encrypt['/V'] in (1, 2)):
-            raise NotImplementedError("only algorithm code 1 and 2 are supported. This PDF uses code %s" % encrypt['/V'])
-        user_password, key = self._authenticateUserPassword(password)
-        if user_password:
-            self._decryption_key = key
+        if not self.isEncrypted:
+            return True
+        if self.encrypt.authenticating_user_password(b_(password)):
             return 1
-        else:
-            rev = encrypt['/R'].getObject()
-            if rev == 2:
-                keylen = 5
-            else:
-                keylen = encrypt['/Length'].getObject() // 8
-            key = _alg33_1(password, rev, keylen)
-            real_O = encrypt["/O"].getObject()
-            if rev == 2:
-                userpass = utils.RC4_encrypt(key, real_O)
-            else:
-                val = real_O
-                for i in range(19, -1, -1):
-                    new_key = b_('')
-                    for l in range(len(key)):
-                        new_key += b_(chr(utils.ord_(key[l]) ^ i))
-                    val = utils.RC4_encrypt(new_key, val)
-                userpass = val
-            owner_password, key = self._authenticateUserPassword(userpass)
-            if owner_password:
-                self._decryption_key = key
-                return 2
+        elif self.encrypt.authenticating_owner_password(b_(password)):
+            return 2
         return 0
 
-    def _authenticateUserPassword(self, password):
-        encrypt = self.trailer['/Encrypt'].getObject()
-        rev = encrypt['/R'].getObject()
-        owner_entry = encrypt['/O'].getObject()
-        p_entry = encrypt['/P'].getObject()
-        id_entry = self.trailer['/ID'].getObject()
-        id1_entry = id_entry[0].getObject()
-        real_U = encrypt['/U'].getObject().original_bytes
-        if rev == 2:
-            U, key = _alg34(password, owner_entry, p_entry, id1_entry)
-        elif rev >= 3:
-            U, key = _alg35(password, rev,
-                    encrypt["/Length"].getObject() // 8, owner_entry,
-                    p_entry, id1_entry,
-                    encrypt.get("/EncryptMetadata", BooleanObject(False)).getObject())
-            U, real_U = U[:16], real_U[:16]
-        return U == real_U, key
-
     def getIsEncrypted(self):
-        return "/Encrypt" in self.trailer
+        if not self.encrypt:
+            from . import encryption
+
+            self._override_encryption = True
+            id_entry = self.trailer['/ID'].getObject()
+            id1_entry = id_entry[0].getObject()
+            if not "/Encrypt" in self.trailer:
+                encrypt = DictionaryObject()
+            else:
+                encrypt = self.trailer['/Encrypt'].getObject()
+            self.encrypt = encryption.Encryption(encrypt, id1_entry)
+            self._override_encryption = False
+
+        return self.encrypt.is_encrypted()
 
     isEncrypted = property(lambda self: self.getIsEncrypted(), None, None)
     """
@@ -2937,7 +2889,7 @@ def _alg32(password, rev, keylen, owner_entry, p_entry, id1_entry, metadata_encr
     m.update(owner_entry.original_bytes)
     # 4. Treat the value of the /P entry as an unsigned 4-byte integer and pass
     # these bytes to the MD5 hash function, low-order byte first.
-    p_entry = struct.pack('<i', p_entry)
+    p_entry = struct.pack('<I', p_entry)
     m.update(p_entry)
     # 5. Pass the first element of the file's file identifier array to the MD5
     # hash function.
