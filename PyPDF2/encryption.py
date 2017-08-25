@@ -68,6 +68,9 @@ class Encryption:
             return
         if self.entries["/Filter"] != '/Standard':
             raise NotImplementedError("only Standard PDF encryption handler is available")
+        if self.entries["/StmF"] == "/Identity":
+            self._method = None
+            return
         cf = self.entries.get("/CF")
         if cf:
             std_cf = cf.get("/StdCF")
@@ -78,6 +81,9 @@ class Encryption:
 
 
     def decrypt_data(self, data, idnum, generation):
+        if not self._method:
+            return data
+
         import struct
         pack1 = struct.pack("<i", idnum)[:3]
         pack2 = struct.pack("<i", generation)[:2]
