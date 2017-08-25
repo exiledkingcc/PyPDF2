@@ -1208,13 +1208,10 @@ class PdfFileReader(object):
         # the original method (flattened page count) is used.
         if self.isEncrypted:
             try:
-                self._override_encryption = True
                 self.decrypt("")
                 return self.trailer["/Root"]["/Pages"]["/Count"]
             except:
                 raise utils.PdfReadError("File has not been decrypted")
-            finally:
-                self._override_encryption = False
         else:
             if self.flattenedPages == None:
                 self._flatten()
@@ -1675,7 +1672,7 @@ class PdfFileReader(object):
             assert generation == indirectReference.generation
             retval = readObject(self.stream, self)
 
-            if self.encrypt and self.encrypt.is_metadata_encrypted():
+            if not self._override_encryption and self.encrypt and self.encrypt.is_encrypted():
                 if not self.encrypt.has_key():
                     raise utils.PdfReadError("file has not been decrypted")
                 # otherwise, decrypt here...
@@ -2036,7 +2033,7 @@ class PdfFileReader(object):
         :rtype: int
         """
         if not self.isEncrypted:
-            return True
+            return 1
         if self.encrypt.authenticating_user_password(b_(password)):
             return 1
         elif self.encrypt.authenticating_owner_password(b_(password)):
@@ -2049,10 +2046,12 @@ class PdfFileReader(object):
 
             self._override_encryption = True
             id_entry = self.trailer['/ID'].getObject()
+            self._override_encryption = True
             id1_entry = id_entry[0].getObject()
             if not "/Encrypt" in self.trailer:
                 encrypt = DictionaryObject()
             else:
+                self._override_encryption = True
                 encrypt = self.trailer['/Encrypt'].getObject()
             self.encrypt = encryption.Encryption(encrypt, id1_entry)
             self._override_encryption = False

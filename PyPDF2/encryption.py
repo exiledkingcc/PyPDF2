@@ -64,6 +64,8 @@ class Encryption:
         return bool(self._authed_password is not None)
 
     def _check_crypt_method(self):
+        if not self.is_encrypted():
+            return
         if self.entries["/Filter"] != '/Standard':
             raise NotImplementedError("only Standard PDF encryption handler is available")
         cf = self.entries.get("/CF")
