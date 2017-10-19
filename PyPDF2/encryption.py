@@ -41,7 +41,7 @@ def _padding(text):
 
 
 class Encryption:
-    def __init__(self, encryption_dict, first_id_entry):
+    def __init__(self, encryption_dict, first_id_entry=None):
         self.entries = {k: encryption_dict[k] for k in encryption_dict}
         self.id_entry = first_id_entry
         self._keys = {}

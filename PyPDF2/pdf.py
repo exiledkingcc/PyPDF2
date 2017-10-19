@@ -2045,14 +2045,17 @@ class PdfFileReader(object):
             from . import encryption
 
             self._override_encryption = True
-            id_entry = self.trailer['/ID'].getObject()
-            self._override_encryption = True
-            id1_entry = id_entry[0].getObject()
+            if "/ID" in self.trailer:
+                id_entry = self.trailer["/ID"].getObject()
+                self._override_encryption = True
+                id1_entry = id_entry[0].getObject()
+            else:
+                id1_entry = None
             if not "/Encrypt" in self.trailer:
                 encrypt = DictionaryObject()
             else:
                 self._override_encryption = True
-                encrypt = self.trailer['/Encrypt'].getObject()
+                encrypt = self.trailer["/Encrypt"].getObject()
             self.encrypt = encryption.Encryption(encrypt, id1_entry)
             self._override_encryption = False
 
